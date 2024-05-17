@@ -1,13 +1,12 @@
 #!/bin/bash
-
 # This script is used for managing AWS credentials, assuming roles
 # and requesting session tokens for MFA required commands.
 # Put this script somewhere on your path and call as needed.
 
-# Invoke the script as: aws-auth [assume-role | get-session-token | clear]
-# aws-auth assume-role: Requests to assume a role
-# aws-auth get-session-token: Requests a session token
-# aws-auth clear: Clears current tokens
+# Invoke the script as: source aws-auth [assume-role | get-session-token | clear]
+# source aws-auth assume-role: Requests to assume a role
+# source aws-auth get-session-token: Requests a session token
+# source aws-auth clear: Clears current tokens
 
 # There should be 3 environment variables:
 #   AWS_ACCESS_KEY_ID
@@ -16,10 +15,25 @@
 
 # Scuffed jq python implementation because IT blocks the real one.
 # Use like: echo $json | jq "['key']['subkey'][0]"
-
 function jq() {
     cat < /dev/stdin | python -c "import json,sys; print(json.load(sys.stdin)${1})"
 }
+
+function is_sourced() {
+   if [ -n "$ZSH_VERSION" ]; then 
+       case $ZSH_EVAL_CONTEXT in *:file:*) return 0;; esac
+   else  # Add additional POSIX-compatible shell names here, if needed.
+       case ${0##*/} in dash|-dash|bash|-bash|ksh|-ksh|sh|-sh) return 0;; esac
+   fi
+   return 1  # NOT sourced.
+ }
+
+if ! is_sourced; then
+    echo "Script MUST be sourced. Invoke as: source aws-auth [assume-role | get-session-token | clear]"
+    exit 1
+fi
+
+error=0
 
 if [ "$1" == "assume-role" ]; then
     unset aws_role aws_mfa_serial aws_mfa_code aws_credentials
@@ -29,19 +43,23 @@ if [ "$1" == "assume-role" ]; then
             -r|--role) shift; aws_role=$1; shift;;
             -m|--mfa-serial) shift; aws_mfa_serial=$1; shift;;
             -c|--mfa-code) shift; aws_mfa_code=$1;shift;;
-            -*) echo "unknown option $1" >&2; shift; error=true;;
-            *) echo "unexpected argument $1"; exit 1; error=true;;
+            -*|--*) echo "unknown option $1"; shift; error=1;;
+            *) echo "unexpected argument $1"; shift; error=1;;
         esac
     done
 
     if [ -z "$aws_role" ]; then
         echo "Required variable not given: [-r | --role]"
-        exit 1
+        error=1
     fi
 
     if [ -z "$aws_mfa_serial" ]; then
         echo "Required variable not given: [-m | --mfa-serial]"
-        exit 1
+        error=1
+    fi
+
+    if [ "$error" -eq 1 ]; then
+        return
     fi
 
     if [ -z "$aws_mfa_code" ]; then
@@ -61,7 +79,7 @@ if [ "$1" == "assume-role" ]; then
     
     if [ -z "$aws_credentials" ]; then
         echo "Authentication failed!"
-        exit 1
+        return
     fi
 
     export AWS_ACCESS_KEY_ID=$(echo $aws_credentials | jq "['Credentials']['AccessKeyId']")
@@ -76,15 +94,20 @@ elif [ "$1" == "get-session-token" ]; then
         case "$1" in
             -m|--mfa-serial) shift; aws_mfa_serial=$1; shift;;
             -c|--mfa-code) shift; aws_mfa_code=$1;shift;;
-            -*) echo "unknown option $1" >&2; shift; error=true;;
-            *) echo "unexpected argument $1"; exit 1; error=true;;
+            -*|--*) echo "unknown option $1"; shift; error=1;;
+            *) echo "unexpected argument $1"; shift; error=1;;
         esac
     done
 
     if [ -z "$aws_mfa_serial" ]; then
         echo "Required variable not given: [-m | --mfa-serial]"
-        exit 1
+        error=1
     fi
+
+    if [ $error -eq 1 ]; then
+        return
+    fi
+
     if [ -z "$aws_mfa_code" ]; then
         read -sp "MFA code: " aws_mfa_code
         printf "\n"
@@ -100,7 +123,7 @@ elif [ "$1" == "get-session-token" ]; then
     
     if [ -z "$aws_credentials" ]; then
         echo "Authentication failed!"
-        exit 1
+        return
     fi
 
     export AWS_ACCESS_KEY_ID=$(echo $aws_credentials | jq "['Credentials']['AccessKeyId']")
@@ -112,5 +135,5 @@ elif [ "$1" == "get-session-token" ]; then
 elif [ "$1" == "clear" ]; then
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 else
-    echo "No command requested. Try 'aws-auth [assume-role | get-session-token | clear]'"
+    echo "No command requested. Try 'source aws-auth [assume-role | get-session-token | clear]'"
 fi
