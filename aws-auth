@@ -4,6 +4,11 @@
 # and requesting session tokens for MFA required commands.
 # Put this script somewhere on your path and call as needed.
 
+# Invoke the script as: aws-auth [assume-role | get-session-token | clear]
+# aws-auth assume-role: Requests to assume a role
+# aws-auth get-session-token: Requests a session token
+# aws-auth clear: Clears current tokens
+
 # There should be 3 environment variables:
 #   AWS_ACCESS_KEY_ID
 #   AWS_SECRET_ACCESS_KEY
@@ -28,6 +33,16 @@ if [ "$1" == "assume-role" ]; then
             *) echo "unexpected argument $1"; exit 1; error=true;;
         esac
     done
+
+    if [ -z "$aws_role" ]; then
+        echo "Required variable not given: [-r | --role]"
+        return
+    fi
+
+    if [ -z "$aws_mfa_serial" ]; then
+        echo "Required variable not given: [-m | --mfa-serial]"
+        return
+    fi
 
     if [ -z "$aws_mfa_code" ]; then
         read -sp "MFA code: " aws_mfa_code
