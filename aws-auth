@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# This script is used for managing AWS credentials, assuming roles
+# and requesting session tokens for MFA required commands.
+# Put this script somewhere on your path and call as needed.
+
+# There should be 3 environment variables:
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#   AWS_SESSION_TOKEN
+
+# Scuffed jq python implementation because IT blocks the real one.
+# Use like: echo $json | jq "['key']['subkey'][0]"
+
+function jq() {
+    cat < /dev/stdin | python -c "import json,sys; print(json.load(sys.stdin)${1})"
+}
+
+if [ "$1" == "assume-role" ]; then
+    unset aws_role aws_mfa_serial aws_mfa_code aws_credentials
+    shift
+    while test $# -gt 0; do
+        case "$1" in
+            -r|--role) shift; aws_role=$1; shift;;
+            -m|--mfa-serial) shift; aws_mfa_serial=$1; shift;;
+            -c|--mfa-code) shift; aws_mfa_code=$1;shift;;
+            -*) echo "unknown option $1" >&2; shift; error=true;;
+            *) echo "unexpected argument $1"; exit 1; error=true;;
+        esac
+    done
+
+    if [ -z "$aws_mfa_code" ]; then
+        read -sp "MFA code: " aws_mfa_code
+        printf "\n"
+    fi
+
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+
+    aws_credentials=$(aws sts assume-role \
+        --role-arn $aws_role \
+        --role-session-name="Session" \
+        --serial-number $aws_mfa_serial \
+        --token-code $aws_mfa_code \
+        --output json)
+
+    
+    if [ -z "$aws_credentials" ]; then
+        echo "Authentication failed!"
+        return
+    fi
+
+    export AWS_ACCESS_KEY_ID=$(echo $aws_credentials | jq "['Credentials']['AccessKeyId']")
+    export AWS_SECRET_ACCESS_KEY=$(echo $aws_credentials | jq "['Credentials']['SecretAccessKey']")
+    export AWS_SESSION_TOKEN=$(echo $aws_credentials | jq "['Credentials']['SessionToken']")
+
+    unset aws_role aws_mfa_serial aws_mfa_code aws_credentials
+elif [ "$1" == "get-session-token" ]; then
+    unset aws_mfa_serial aws_mfa_code aws_credentials
+    shift
+    while test $# -gt 0; do
+        case "$1" in
+            -m|--mfa-serial) shift; aws_mfa_serial=$1; shift;;
+            -c|--mfa-code) shift; aws_mfa_code=$1;shift;;
+            -*) echo "unknown option $1" >&2; shift; error=true;;
+            *) echo "unexpected argument $1"; exit 1; error=true;;
+        esac
+    done
+
+    if [ -z "$aws_mfa_serial" ]; then
+        echo "Required variable not given: [-m | --mfa-serial]"
+        return
+    fi
+    if [ -z "$aws_mfa_code" ]; then
+        read -sp "MFA code: " aws_mfa_code
+        printf "\n"
+    fi
+
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+
+    aws_credentials=$(aws sts get-session-token \
+        --serial-number $aws_mfa_serial \
+        --token-code $aws_mfa_code \
+        --output json)
+
+    
+    if [ -z "$aws_credentials" ]; then
+        echo "Authentication failed!"
+        return
+    fi
+
+    export AWS_ACCESS_KEY_ID=$(echo $aws_credentials | jq "['Credentials']['AccessKeyId']")
+    export AWS_SECRET_ACCESS_KEY=$(echo $aws_credentials | jq "['Credentials']['SecretAccessKey']")
+    export AWS_SESSION_TOKEN=$(echo $aws_credentials | jq "['Credentials']['SessionToken']")
+
+    unset aws_mfa_serial aws_mfa_code aws_credentials
+
+elif [ "$1" == "clear" ]; then
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+else
+    echo "No command requested. Try 'aws-auth [assume-role | get-session-token]'"
+fi
